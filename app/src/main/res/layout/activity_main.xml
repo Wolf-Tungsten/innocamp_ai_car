@@ -36,5 +36,26 @@
             android:id="@+id/threshold2"
             android:layout_width="match_parent"
             android:layout_height="wrap_content" />
+
+        <TextView
+            android:id="@+id/area"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textColor="#FFFF00"
+            android:textSize="32sp" />
+
+        <TextView
+            android:id="@+id/center_x"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textColor="#FFFF00"
+            android:textSize="32sp" />
+
+        <TextView
+            android:id="@+id/center_y"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textColor="#FFFF00"
+            android:textSize="32sp" />
     </LinearLayout>
 </RelativeLayout>

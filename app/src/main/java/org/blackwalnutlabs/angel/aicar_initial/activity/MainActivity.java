@@ -15,6 +15,7 @@ import android.os.Handler;
 import android.os.IBinder;
 import android.os.Message;
 import android.support.annotation.NonNull;
+import android.support.annotation.UiThread;
 import android.support.v4.content.ContextCompat;
 import android.util.Log;
 import android.view.SurfaceView;
@@ -27,8 +28,9 @@ import org.blackwalnutlabs.angel.aicar_initial.R;
 import org.blackwalnutlabs.angel.aicar_initial.bth.BluetoothService;
 import org.blackwalnutlabs.angel.aicar_initial.bth.conn.BleCharacterCallback;
 import org.blackwalnutlabs.angel.aicar_initial.bth.exception.BleException;
-import org.blackwalnutlabs.angel.aicar_initial.models.LaneDetection;
+import org.blackwalnutlabs.angel.aicar_initial.models.FollowDetection;
 import org.blackwalnutlabs.angel.aicar_initial.models.MnistClassifier;
+import org.blackwalnutlabs.angel.aicar_initial.models.TrafficDetection;
 import org.blackwalnutlabs.angel.aicar_initial.setting.MQTTSetting;
 import org.blackwalnutlabs.angel.aicar_initial.util.BWMQTTClient;
 import org.blackwalnutlabs.angel.aicar_initial.util.PermissionUtils;
@@ -36,14 +38,18 @@ import org.json.JSONException;
 import org.json.JSONObject;
 import org.opencv.android.CameraBridgeViewBase;
 import org.opencv.android.OpenCVLoader;
+import org.opencv.core.Core;
 import org.opencv.core.CvType;
 import org.opencv.core.Mat;
 import org.opencv.core.MatOfPoint;
+import org.opencv.core.Point;
+import org.opencv.core.Rect;
+import org.opencv.core.Scalar;
 import org.opencv.core.Size;
 import org.opencv.imgproc.Imgproc;
 
-import java.io.IOException;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Timer;
 import java.util.TimerTask;
@@ -63,7 +69,9 @@ public class MainActivity extends Activity implements CameraBridgeViewBase.CvCam
     private String carID = "";
     private String track = "";
 
-
+    private int rightSpeed = 0;
+    private int leftSpeed = 0;
+    private int mode = 0;
     /**
      * System
      */
@@ -113,6 +121,9 @@ public class MainActivity extends Activity implements CameraBridgeViewBase.CvCam
      */
     private SeekBar threshold1;
     private SeekBar threshold2;
+    private TextView areaTextView;
+    private TextView xTextView;
+    private TextView yTextView;
 
     private void initDebug() {
         threshold1 = findViewById(R.id.threshold1);
@@ -156,6 +167,10 @@ public class MainActivity extends Activity implements CameraBridgeViewBase.CvCam
         });
         threshold2.setMax(254);
         threshold2.setProgress(50);
+
+        areaTextView = (TextView) findViewById(R.id.area);
+        xTextView = (TextView) findViewById(R.id.center_x);
+        yTextView = (TextView) findViewById(R.id.center_y);
     }
 
     /**
@@ -198,6 +213,8 @@ public class MainActivity extends Activity implements CameraBridgeViewBase.CvCam
                 BLE_start_listener();
             } else if (msg.what == 2) {
                 BLE_start_writer();
+            } else if (msg.what == 3) {
+                writer(mode, leftSpeed, rightSpeed);
             }
             super.handleMessage(msg);
         }
@@ -212,6 +229,30 @@ public class MainActivity extends Activity implements CameraBridgeViewBase.CvCam
         }
         return protocol_msg;
     }
+
+    private void writer(int controlMode, int targetL, int targetR) { //仅仅用于发送小车动作控制命令
+        final BluetoothGattCharacteristic characteristic = mBluetoothService.getCharacteristic();
+        mBluetoothService.write(
+                characteristic.getService().getUuid().toString(),
+                characteristic.getUuid().toString(),
+                String.valueOf(protocol(controlMode) + protocol(targetL) + protocol(targetR) + protocol(0) + protocol(0) + protocol(0) + protocol(0) + protocol(0) + protocol(0) + protocol(4321)),//发送10进制比特
+                new BleCharacterCallback() {
+                    @Override
+                    public void onSuccess(final BluetoothGattCharacteristic characteristic) {
+                        //成功写入操作
+                    }
+
+                    @Override
+                    public void onFailure(final BleException exception) {
+                        StartBLEWriterAfter(150);
+                    }
+
+                    @Override
+                    public void onInitiatedResult(boolean result) {
+
+                    }
+                });
+    }  //写数据
 
     private void writer(int targetL, int targetR) { //仅仅用于发送小车动作控制命令
         final BluetoothGattCharacteristic characteristic = mBluetoothService.getCharacteristic();
@@ -386,8 +427,9 @@ public class MainActivity extends Activity implements CameraBridgeViewBase.CvCam
      * Computer Vision
      */
     private CameraBridgeViewBase openCvCameraView;
-    private LaneDetection laneDetector;
     private MnistClassifier mnistClassifier;
+    private TrafficDetection trafficDetection;
+    private FollowDetection followDetection;
 
     private Mat[] tmpMats;
     private Mat emptyMat;
@@ -454,9 +496,10 @@ public class MainActivity extends Activity implements CameraBridgeViewBase.CvCam
 
         Map<String, Object> othersMap = new HashMap<>();
         othersMap.put("kernel", kernel);
+        othersMap.put("assets", getAssets());
 
-        laneDetector = new LaneDetection(tmpMap, funMap, debugMap, othersMap);
-        mnistClassifier = new MnistClassifier(this, tmpMap, funMap, othersMap);
+        followDetection = new FollowDetection(this, tmpMap, funMap, othersMap);
+
     }
 
     @Override
@@ -464,18 +507,54 @@ public class MainActivity extends Activity implements CameraBridgeViewBase.CvCam
     }
 
     @Override
+    @SuppressWarnings("unchecked")
     public Mat onCameraFrame(CameraBridgeViewBase.CvCameraViewFrame inputFrame) {
         Mat input = inputFrame.rgba();
-
         Mat dst = tmpMats[0];
         emptyMat.copyTo(dst);
-
-        // 控制路线部分
-        // controlHandler.sendEmptyMessage(laneDetector.process(input, dst));
-
-        // 识别数字部分
-        int result = mnistClassifier.recognize(input, dst);
-        Log.d("mnist-result", String.format("%d", result));
+        follow(input, dst);
         return dst;
+    }
+
+    private void follow(Mat src, Mat dst) {
+        int upperArea = 0;
+        int lowerArea = 0;
+        FollowDetection.FollowDetectResult detectionResult = followDetection.detect(src, dst);
+        if (detectionResult != null) {
+            areaTextView.setText(String.format("面积：%.02f", detectionResult.area));
+            xTextView.setText(String.format("x：%d", (int)detectionResult.center.x));
+            yTextView.setText(String.format("y：%d", (int)detectionResult.center.y));
+            if (detectionResult.area > 150000) {
+                mode = 5;
+                leftSpeed = 0;
+                rightSpeed = 0;
+            } else{
+                if (detectionResult.center.x > 320 + 50) {
+                    mode = 5;
+                    leftSpeed = 120;
+                    rightSpeed = 70;
+                } else if (detectionResult.center.x < 320 - 50) {
+                    mode = 5;
+                    leftSpeed = 70;
+                    rightSpeed = 120;
+                } else {
+                    mode = 5;
+                    leftSpeed = 120;
+                    rightSpeed = 120;
+                }
+            }
+
+            Message msg = new Message();
+            msg.what = 3;
+            bthHandler.sendMessage(msg);
+
+        } else {
+            mode = 6;
+            leftSpeed = 120;
+            rightSpeed = 120;
+            Message msg = new Message();
+            msg.what = 3;
+            bthHandler.sendMessage(msg);
+        }
     }
 }

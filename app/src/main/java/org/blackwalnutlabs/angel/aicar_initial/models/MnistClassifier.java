@@ -27,13 +27,16 @@ import java.nio.MappedByteBuffer;
 import java.nio.channels.FileChannel;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.Queue;
 
 import static org.opencv.imgproc.Imgproc.COLOR_RGB2HSV;
 import static org.opencv.imgproc.Imgproc.resize;
 
 public class MnistClassifier {
+
     private static final String LOG_TAG = MnistClassifier.class.getSimpleName();
 
     private static final String MODEL_PATH = "mnist.tflite";
@@ -43,8 +46,11 @@ public class MnistClassifier {
     public static final int DIM_IMG_SIZE_WIDTH = 28;
     private static final int DIM_PIXEL_SIZE = 1;
     private static final int CATEGORY_COUNT = 10;
+    private static final int BELIEVE_COUNT = 20;
 
 
+    private LinkedList<Integer> numberQueue;
+    private int[] numberCounter;
     private Interpreter mInterpreter = null;
     private final ByteBuffer mImgData;
     private final int[] mImagePixels = new int[DIM_IMG_SIZE_HEIGHT * DIM_IMG_SIZE_WIDTH];
@@ -56,6 +62,7 @@ public class MnistClassifier {
 
     private MatOfPoint[] tmpMatOfPoints;
     private MatOfPoint emptyMatOfPoint;
+
 
     private Mat kernel;
 
@@ -78,6 +85,12 @@ public class MnistClassifier {
         mImgData = ByteBuffer.allocateDirect(
                 4 * DIM_BATCH_SIZE * DIM_IMG_SIZE_HEIGHT * DIM_IMG_SIZE_WIDTH * DIM_PIXEL_SIZE);
         mImgData.order(ByteOrder.nativeOrder());
+
+        numberQueue = new LinkedList<>();
+        numberCounter = new int[10];
+        for (int i = 0; i < numberCounter.length; i++) {
+            numberCounter[i] = 0;
+        }
     }
 
     public int recognize(Mat src, Mat dst){
@@ -87,8 +100,30 @@ public class MnistClassifier {
             Imgproc.resize(digit, resized , new Size(DIM_IMG_SIZE_WIDTH, DIM_IMG_SIZE_HEIGHT));
             Bitmap  digitBitmap = convertMatToBitmap(resized);
             Result result = classify(digitBitmap);
-            return result.getNumber();
+            int currentResult =  result.getNumber();
+
+            numberCounter[currentResult]++;
+            numberQueue.offer(currentResult);
+            if (numberQueue.size() > BELIEVE_COUNT) {
+                numberCounter[numberQueue.poll()] --;
+            }
+
+            int currentMax = 0;
+            int currentMaxResult = 0;
+            for (int i = 0; i < numberCounter.length; i++) {
+                if (numberCounter[i] > currentMax) {
+                    currentMax = numberCounter[i];
+                    currentMaxResult = i;
+                }
+            }
+
+            return currentMaxResult;
         } else {
+            // 不存在的时候清空统计
+            for (int i = 0; i < numberCounter.length; i++) {
+                numberCounter[i] = 0;
+            }
+            numberQueue.clear();
             return -1;
         }
 
