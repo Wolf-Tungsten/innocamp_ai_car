@@ -28,6 +28,7 @@ import org.blackwalnutlabs.angel.aicar_initial.R;
 import org.blackwalnutlabs.angel.aicar_initial.bth.BluetoothService;
 import org.blackwalnutlabs.angel.aicar_initial.bth.conn.BleCharacterCallback;
 import org.blackwalnutlabs.angel.aicar_initial.bth.exception.BleException;
+import org.blackwalnutlabs.angel.aicar_initial.models.DominoDetector;
 import org.blackwalnutlabs.angel.aicar_initial.models.FollowDetection;
 import org.blackwalnutlabs.angel.aicar_initial.models.MnistClassifier;
 import org.blackwalnutlabs.angel.aicar_initial.models.TrafficDetection;
@@ -430,6 +431,7 @@ public class MainActivity extends Activity implements CameraBridgeViewBase.CvCam
     private MnistClassifier mnistClassifier;
     private TrafficDetection trafficDetection;
     private FollowDetection followDetection;
+    private DominoDetector dominoDetector;
 
     private Mat[] tmpMats;
     private Mat emptyMat;
@@ -499,7 +501,7 @@ public class MainActivity extends Activity implements CameraBridgeViewBase.CvCam
         othersMap.put("assets", getAssets());
 
         followDetection = new FollowDetection(this, tmpMap, funMap, othersMap);
-
+        dominoDetector = new DominoDetector();
     }
 
     @Override
@@ -512,10 +514,12 @@ public class MainActivity extends Activity implements CameraBridgeViewBase.CvCam
         Mat input = inputFrame.rgba();
         Mat dst = tmpMats[0];
         emptyMat.copyTo(dst);
-        follow(input, dst);
+        //follow(input, dst);
+        intro(input, dst);
         return dst;
     }
 
+    // 目标跟随
     private void follow(Mat src, Mat dst) {
         int upperArea = 0;
         int lowerArea = 0;
@@ -556,5 +560,65 @@ public class MainActivity extends Activity implements CameraBridgeViewBase.CvCam
             msg.what = 3;
             bthHandler.sendMessage(msg);
         }
+    }
+
+
+    // 停车入库
+    private void intro(Mat src, Mat dst) {
+        src.copyTo(dst);
+        DominoDetector.DominoResult result = dominoDetector.detect(src);
+        // 绘制预览
+        if (result.red != null) {
+            Core.rectangle(dst, new Point(result.red.x, result.red.y), new Point(result.red.x + result.red.width, result.red.y + result.red.height), new Scalar(255, 0, 0), 2);
+        }
+        if (result.green != null) {
+            Core.rectangle(dst, new Point(result.green.x, result.green.y), new Point(result.green.x + result.green.width, result.green.y + result.green.height), new Scalar(0, 255, 0), 2);
+        }
+        if (result.blue != null) {
+            Core.rectangle(dst, new Point(result.blue.x, result.blue.y), new Point(result.blue.x + result.blue.width, result.blue.y + result.blue.height), new Scalar(0, 0, 255), 2);
+        }
+        if (result.purple != null) {
+            Core.rectangle(dst, new Point(result.purple.x, result.purple.y), new Point(result.purple.x + result.purple.width, result.purple.y + result.purple.height), new Scalar(125, 0, 255), 2);
+        }
+
+        rightSpeed = 100;
+        leftSpeed = 100;
+        if (result.red != null) {
+            // 有红色的直行
+            mode = 5;
+            rightSpeed = 100;
+            leftSpeed = 100;
+        } else {
+            // 没有红色之后
+            if (result.green != null) {
+                // 有绿色
+                // 向右前方
+                mode = 5;
+                rightSpeed = 50;
+                leftSpeed = 80;
+            } else {
+                // 看不到绿色之后
+                if (result.blue != null) {
+                    mode = 5;
+                    rightSpeed = 30;
+                    leftSpeed = 80;
+                } else {
+                    if (result.purple != null) {
+                        mode = 5;
+                        rightSpeed = 0;
+                        leftSpeed = 0;
+                    }
+                }
+            }
+        }
+        mode = 5;
+        Message msg = new Message();
+        msg.what = 3;
+        bthHandler.sendMessage(msg);
+    }
+
+    // 路径导航
+    private void guide(Mat src, Mat dst) {
+
     }
 }
